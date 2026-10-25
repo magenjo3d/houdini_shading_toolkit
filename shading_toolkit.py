@@ -1,4 +1,4 @@
-"""Lookdev Toolkit for Houdini.
+"""Shading Toolkit for Houdini.
 
 A small standalone tool that:
   1. Reads the currently selected node(s) in Houdini.
@@ -21,10 +21,10 @@ or use File > Run Script.... No extra steps needed.
 
 From the Python Shell / another script, instead do::
 
-    import lookdev_toolkit
-    lookdev_toolkit.show_lookdev_toolkit()
+    import Shading_toolkit
+    Shading_toolkit.show_Shading_toolkit()
 
-(the first ``import`` also opens the window; call ``show_lookdev_toolkit()``
+(the first ``import`` also opens the window; call ``show_Shading_toolkit()``
 again any time afterwards to reopen/refresh it.)
 
 As a Houdini Python Panel:
@@ -61,6 +61,155 @@ TYPE_PRESETS = {
     "VRay Material": "vraymtl*,v_ray_mtl*",
     "Material Builder / Subnet": "subnet*,materialbuilder*",
 }
+
+
+# ---------------------------------------------------------------------------
+# A friendlier, modern flat/dark look that still blends in with Houdini's own
+# dark theme when the tool is floating (or docked) next to it.
+# ---------------------------------------------------------------------------
+STYLE_SHEET = """
+QWidget {
+    background-color: #363636;
+    color: #e6e6e6;
+    font-size: 9pt;
+}
+QGroupBox {
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding: 10px 8px 8px 8px;
+    font-weight: bold;
+    color: #cfd8e3;
+    background-color: #3a3a3a;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    top: -2px;
+    padding: 0 6px;
+    color: #7fb3ff;
+}
+QLabel {
+    background-color: transparent;
+}
+QLabel#HeaderTitle {
+    font-size: 15pt;
+    font-weight: bold;
+    color: #ffffff;
+}
+QLabel#HeaderSubtitle {
+    color: #9da7b3;
+}
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background-color: #2b2b2b;
+    border: 1px solid #505050;
+    border-radius: 4px;
+    padding: 3px 5px;
+    selection-background-color: #5296d5;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1px solid #5296d5;
+}
+QPushButton {
+    background-color: #4a4a4a;
+    border: 1px solid #5a5a5a;
+    border-radius: 5px;
+    padding: 5px 12px;
+}
+QPushButton:hover {
+    background-color: #565656;
+    border: 1px solid #5296d5;
+}
+QPushButton:pressed {
+    background-color: #3a3a3a;
+}
+QPushButton#PrimaryButton {
+    background-color: #3d7ab5;
+    border: 1px solid #5296d5;
+    color: #ffffff;
+    font-weight: bold;
+}
+QPushButton#PrimaryButton:hover {
+    background-color: #4a8cc9;
+}
+QCheckBox {
+    spacing: 6px;
+    background-color: transparent;
+}
+QTreeWidget, QTableWidget {
+    background-color: #2f2f2f;
+    alternate-background-color: #353535;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    gridline-color: #454545;
+}
+QTreeWidget::item, QTableWidget::item {
+    padding: 3px;
+}
+QTreeWidget::item:selected, QTableWidget::item:selected {
+    background-color: #3d7ab5;
+    color: #ffffff;
+}
+QHeaderView::section {
+    background-color: #424242;
+    color: #dcdcdc;
+    padding: 4px;
+    border: none;
+    border-right: 1px solid #4a4a4a;
+}
+QTabWidget::pane {
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+    top: -1px;
+}
+QTabBar::tab {
+    background-color: #3a3a3a;
+    color: #c6c6c6;
+    padding: 6px 14px;
+    border: 1px solid #4a4a4a;
+    border-bottom: none;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+}
+QTabBar::tab:selected {
+    background-color: #4a4a4a;
+    color: #ffffff;
+}
+QTabBar::tab:hover {
+    background-color: #454545;
+}
+QSplitter::handle {
+    background-color: transparent;
+}
+QSplitter::handle:horizontal {
+    width: 14px;
+    margin: 2px 4px;
+    border-left: 1px solid #4a4a4a;
+    border-right: 1px solid #4a4a4a;
+}
+QSplitter::handle:horizontal:hover {
+    border-left: 1px solid #5296d5;
+    border-right: 1px solid #5296d5;
+}
+QLabel#StatusLabel {
+    padding: 4px 6px;
+    border-radius: 4px;
+}
+QScrollBar:vertical {
+    background: #2f2f2f;
+    width: 10px;
+    margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: #5a5a5a;
+    border-radius: 5px;
+    min-height: 20px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #6a6a6a;
+}
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +479,7 @@ class ParmValueEditor(QtWidgets.QWidget):
                 if kind == hou.parmTemplateType.Float:
                     spin = QtWidgets.QDoubleSpinBox()
                     spin.setDecimals(4)
+                    spin.setSingleStep(0.1)
                 else:
                     spin = QtWidgets.QSpinBox()
                 spin.setRange(-1000000, 1000000)
@@ -378,14 +528,54 @@ class ParmValueEditor(QtWidgets.QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Splitter with a subtle "<>" grip drawn on its handle, so it reads as a
+# two-sided drag affordance rather than a plain divider line.
+# ---------------------------------------------------------------------------
+class _FriendlySplitterHandle(QtWidgets.QSplitterHandle):
+
+    def paintEvent(self, event):
+        super(_FriendlySplitterHandle, self).paintEvent(event)
+        if self.orientation() != QtCore.Qt.Horizontal:
+            return
+
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        color = QtGui.QColor("#5296d5" if self.underMouse() else "#8a8a8a")
+        painter.setBrush(color)
+        painter.setPen(QtCore.Qt.NoPen)
+
+        cx = self.width() / 2.0
+        cy = self.height() / 2.0
+        size, gap = 4, 3
+
+        painter.drawPolygon(QtGui.QPolygonF([
+            QtCore.QPointF(cx - gap - size, cy),
+            QtCore.QPointF(cx - gap, cy - size),
+            QtCore.QPointF(cx - gap, cy + size),
+        ]))
+        painter.drawPolygon(QtGui.QPolygonF([
+            QtCore.QPointF(cx + gap + size, cy),
+            QtCore.QPointF(cx + gap, cy - size),
+            QtCore.QPointF(cx + gap, cy + size),
+        ]))
+
+
+class _FriendlySplitter(QtWidgets.QSplitter):
+
+    def createHandle(self):
+        return _FriendlySplitterHandle(self.orientation(), self)
+
+
+# ---------------------------------------------------------------------------
 # Main widget.
 # ---------------------------------------------------------------------------
-class LookdevToolkitWidget(QtWidgets.QWidget):
+class ShadingToolkitWidget(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
-        super(LookdevToolkitWidget, self).__init__(parent)
-        self.setWindowTitle("Lookdev Toolkit")
-        self.resize(980, 620)
+        super(ShadingToolkitWidget, self).__init__(parent)
+        self.setWindowTitle("Shading Toolkit")
+        self.resize(1040, 680)
+        self.setStyleSheet(STYLE_SHEET)
 
         self._roots = []
         self._results = []  # list of (hou.Node, matched_parm_name)
@@ -398,10 +588,14 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
     # -- UI construction ---------------------------------------------------
     def _build_ui(self):
         main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(12, 12, 12, 12)
 
-        main_layout.addLayout(self._build_filter_bar())
+        main_layout.addLayout(self._build_header())
+        main_layout.addWidget(self._build_filter_bar())
 
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter = _FriendlySplitter(QtCore.Qt.Horizontal)
+        splitter.setHandleWidth(14)
         splitter.addWidget(self._build_tree())
         splitter.addWidget(self._build_tabs())
         splitter.setStretchFactor(0, 2)
@@ -409,13 +603,36 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
         main_layout.addWidget(splitter, 1)
 
         self.status_label = QtWidgets.QLabel("")
-        self.status_label.setStyleSheet("color: gray;")
+        self.status_label.setObjectName("StatusLabel")
         main_layout.addWidget(self.status_label)
+        self._set_status("Ready - select node(s) in Houdini and click Rescan Selection.", level="info")
+
+    def _build_header(self):
+        row = QtWidgets.QHBoxLayout()
+        icon_label = QtWidgets.QLabel("\U0001F3A8")
+        icon_label.setStyleSheet("font-size: 22pt;")
+        row.addWidget(icon_label)
+
+        title_box = QtWidgets.QVBoxLayout()
+        title_box.setSpacing(0)
+        title = QtWidgets.QLabel("Shading Toolkit")
+        title.setObjectName("HeaderTitle")
+        subtitle = QtWidgets.QLabel("Scan, inspect and batch-edit shader parameters across selected nodes")
+        subtitle.setObjectName("HeaderSubtitle")
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        row.addLayout(title_box)
+        row.addStretch()
+        return row
 
     def _build_filter_bar(self):
-        layout = QtWidgets.QGridLayout()
+        group = QtWidgets.QGroupBox("Selection and Filters")
+        layout = QtWidgets.QGridLayout(group)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(8)
 
         self.roots_label = QtWidgets.QLabel("Selection: (none)")
+        self.roots_label.setWordWrap(True)
         layout.addWidget(self.roots_label, 0, 0, 1, 4)
 
         layout.addWidget(QtWidgets.QLabel("Node type contains:"), 1, 0)
@@ -439,10 +656,12 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
         layout.addWidget(self.include_roots_check, 2, 2, 1, 2)
 
         rescan_btn = QtWidgets.QPushButton("Rescan Selection")
+        rescan_btn.setObjectName("PrimaryButton")
+        rescan_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
         rescan_btn.clicked.connect(self.rescan)
         layout.addWidget(rescan_btn, 0, 4, 3, 1)
 
-        return layout
+        return group
 
     def _on_type_preset_changed(self, text):
         preset = TYPE_PRESETS.get(text)
@@ -454,41 +673,85 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
             self.type_combo.blockSignals(False)
 
     def _build_tree(self):
+        group = QtWidgets.QGroupBox("Found Nodes")
+        v = QtWidgets.QVBoxLayout(group)
+
+        quick_filter_row = QtWidgets.QHBoxLayout()
+        quick_filter_row.addWidget(QtWidgets.QLabel("Quick filter:"))
+        self.quick_filter_edit = QtWidgets.QLineEdit()
+        self.quick_filter_edit.setPlaceholderText(
+            "Type to instantly narrow the list below by name, path or type..."
+        )
+        self.quick_filter_edit.textChanged.connect(self._apply_quick_filter)
+        quick_filter_row.addWidget(self.quick_filter_edit)
+        v.addLayout(quick_filter_row)
+
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setHeaderLabels(["Name", "Path", "Type", "Matched Parm"])
         self.tree.setColumnWidth(0, 160)
         self.tree.setColumnWidth(1, 260)
         self.tree.setColumnWidth(2, 180)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setSortingEnabled(True)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setUniformRowHeights(True)
         self.tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self.tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
 
-        container = QtWidgets.QWidget()
-        v = QtWidgets.QVBoxLayout(container)
-        v.setContentsMargins(0, 0, 0, 0)
-
         btn_row = QtWidgets.QHBoxLayout()
         check_all_btn = QtWidgets.QPushButton("Check All")
+        check_all_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogApplyButton))
         check_all_btn.clicked.connect(lambda: self._set_all_checked(True))
         uncheck_all_btn = QtWidgets.QPushButton("Uncheck All")
+        uncheck_all_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogCancelButton))
         uncheck_all_btn.clicked.connect(lambda: self._set_all_checked(False))
         invert_btn = QtWidgets.QPushButton("Invert")
+        invert_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
         invert_btn.clicked.connect(self._invert_checked)
         btn_row.addWidget(check_all_btn)
         btn_row.addWidget(uncheck_all_btn)
         btn_row.addWidget(invert_btn)
         btn_row.addStretch()
         self.count_label = QtWidgets.QLabel("0 nodes found")
+        self.count_label.setStyleSheet("color: #9da7b3;")
         btn_row.addWidget(self.count_label)
 
         v.addLayout(btn_row)
         v.addWidget(self.tree)
-        return container
+        return group
+
+    def _apply_quick_filter(self, text=None):
+        """Live-filter the already-scanned tree items as the user types,
+        without needing to hit Rescan again."""
+        if text is None:
+            text = self.quick_filter_edit.text()
+        text = text.strip().lower()
+        total = len(self._results)
+        shown = 0
+        for item in self._all_items():
+            haystack = " ".join(item.text(c) for c in range(item.columnCount())).lower()
+            match = not text or text in haystack
+            item.setHidden(not match)
+            if match:
+                shown += 1
+        if text:
+            self.count_label.setText("{} of {} nodes shown".format(shown, total))
+        else:
+            self.count_label.setText("{} nodes found".format(total))
 
     def _build_tabs(self):
         tabs = QtWidgets.QTabWidget()
-        tabs.addTab(self._build_parameters_tab(), "Node Parameters")
-        tabs.addTab(self._build_copy_tab(), "Copy All From Reference")
+        tabs.addTab(
+            self._build_parameters_tab(),
+            self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogDetailedView),
+            "Node Parameters",
+        )
+        tabs.addTab(
+            self._build_copy_tab(),
+            self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton),
+            "Copy All From Reference",
+        )
         return tabs
 
     def _build_parameters_tab(self):
@@ -500,8 +763,10 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
         top_row = QtWidgets.QHBoxLayout()
         self.inspected_node_label = QtWidgets.QLabel("Node: (click a node in the list on the left)")
         self.inspected_node_label.setWordWrap(True)
+        self.inspected_node_label.setStyleSheet("font-weight: bold;")
         top_row.addWidget(self.inspected_node_label, 1)
         refresh_btn = QtWidgets.QPushButton("Refresh")
+        refresh_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
         refresh_btn.clicked.connect(self._refresh_parameter_table)
         top_row.addWidget(refresh_btn)
         layout.addLayout(top_row)
@@ -529,6 +794,7 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
         header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
         header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
         self.parm_table.verticalHeader().setVisible(False)
+        self.parm_table.setAlternatingRowColors(True)
         self.parm_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.parm_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         layout.addWidget(self.parm_table)
@@ -542,6 +808,7 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
 
         self.reference_label = QtWidgets.QLabel("Reference node: (none - right-click a node in the list)")
         self.reference_label.setWordWrap(True)
+        self.reference_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(self.reference_label)
 
         form = QtWidgets.QFormLayout()
@@ -556,6 +823,8 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
         layout.addStretch()
 
         apply_btn = QtWidgets.QPushButton("Copy All Parameters To Checked Nodes")
+        apply_btn.setObjectName("PrimaryButton")
+        apply_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton))
         apply_btn.clicked.connect(self._apply_copy_from_reference)
         layout.addWidget(apply_btn)
 
@@ -563,45 +832,65 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
 
     # -- scanning ------------------------------------------------------------
     def rescan(self):
-        selected = get_selected_root_nodes()
-        if selected:
-            self._roots = list(selected)
-        if not self._roots:
-            self.roots_label.setText("Selection: (none) - select node(s) in Houdini and click Rescan")
-            self._results = []
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            selected = get_selected_root_nodes()
+            if selected:
+                self._roots = list(selected)
+            if not self._roots:
+                self.roots_label.setText("Selection: (none) - select node(s) in Houdini and click Rescan")
+                self._results = []
+                self._populate_tree()
+                self._set_status("No selection - select node(s) in Houdini first.", level="warning")
+                return
+
+            self.roots_label.setText(
+                "Selection: " + ", ".join(n.path() for n in self._roots)
+            )
+
+            type_text = self.type_combo.currentText() if hasattr(self, "type_combo") else ""
+            parm_text = self.parm_filter_edit.text() if hasattr(self, "parm_filter_edit") else ""
+            recursive = self.recursive_check.isChecked() if hasattr(self, "recursive_check") else True
+            include_roots = self.include_roots_check.isChecked() if hasattr(self, "include_roots_check") else False
+
+            self._results = scan_children(
+                self._roots,
+                type_text=type_text,
+                parm_text=parm_text,
+                recursive=recursive,
+                include_roots=include_roots,
+            )
             self._populate_tree()
-            return
-
-        self.roots_label.setText(
-            "Selection: " + ", ".join(n.path() for n in self._roots)
-        )
-
-        type_text = self.type_combo.currentText() if hasattr(self, "type_combo") else ""
-        parm_text = self.parm_filter_edit.text() if hasattr(self, "parm_filter_edit") else ""
-        recursive = self.recursive_check.isChecked() if hasattr(self, "recursive_check") else True
-        include_roots = self.include_roots_check.isChecked() if hasattr(self, "include_roots_check") else False
-
-        self._results = scan_children(
-            self._roots,
-            type_text=type_text,
-            parm_text=parm_text,
-            recursive=recursive,
-            include_roots=include_roots,
-        )
-        self._populate_tree()
-        self._set_status("Found {} node(s).".format(len(self._results)))
+            self._set_status(
+                "Found {} node(s).".format(len(self._results)),
+                level="success" if self._results else "info",
+            )
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
     def _populate_tree(self):
+        self.tree.setSortingEnabled(False)
         self.tree.clear()
         for node, matched_parm in self._results:
             item = QtWidgets.QTreeWidgetItem([
                 node.name(), node.path(), node.type().name(), matched_parm or ""
             ])
+            if hou is not None:
+                try:
+                    item.setIcon(0, hou.qt.Icon(node.type().icon(), 16, 16))
+                except Exception:
+                    pass
+            if matched_parm:
+                item.setForeground(3, QtGui.QColor("#7fd17f"))
             item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
             item.setCheckState(0, QtCore.Qt.Checked)
             item.setData(0, QtCore.Qt.UserRole, node.path())
             self.tree.addTopLevelItem(item)
-        self.count_label.setText("{} nodes found".format(len(self._results)))
+        self.tree.setSortingEnabled(True)
+        if hasattr(self, "quick_filter_edit"):
+            self._apply_quick_filter(self.quick_filter_edit.text())
+        else:
+            self.count_label.setText("{} nodes found".format(len(self._results)))
 
     # -- tree helpers ---------------------------------------------------------
     def _all_items(self):
@@ -693,6 +982,7 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
                 self.parm_table.setCellWidget(row, 1, QtWidgets.QLabel("(unsupported: {})".format(exc)))
 
             apply_btn = QtWidgets.QPushButton("Apply")
+            apply_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogApplyButton))
             apply_btn.clicked.connect(lambda _checked=False, r=row, n=name: self._apply_parameter_row(r, n))
             self.parm_table.setCellWidget(row, 2, apply_btn)
 
@@ -701,11 +991,13 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
     def _apply_parameter_row(self, row, parm_name):
         node = hou.node(self._inspected_path) if self._inspected_path else None
         if node is None:
-            self._set_status("Inspected node no longer exists.", error=True)
+            self._set_status("Inspected node no longer exists.", level="error")
             return
         editor = self.parm_table.cellWidget(row, 1)
         if not isinstance(editor, ParmValueEditor):
-            self._set_status("'{}' has an unsupported type and cannot be edited here.".format(parm_name), error=True)
+            self._set_status(
+                "'{}' has an unsupported type and cannot be edited here.".format(parm_name), level="error"
+            )
             return
         values = editor.values()
         if values is None:
@@ -715,51 +1007,90 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
         if self.broadcast_check.isChecked():
             targets.extend(n for n in self._checked_nodes() if n.path() != node.path())
 
-        applied = 0
-        errors = []
-        with hou.undos.group("Lookdev Toolkit: Set '{}'".format(parm_name)):
-            for target in targets:
-                ok, err = set_parm_tuple_value(target, parm_name, values)
-                if ok:
-                    applied += 1
-                else:
-                    errors.append("{}: {}".format(target.path(), err))
+        if len(targets) > 1:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Confirm Batch Apply",
+                "Apply '{}' to {} checked node(s)?\n\nThis can be undone with Ctrl+Z.".format(
+                    parm_name, len(targets)
+                ),
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes,
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                self._set_status("Apply cancelled.", level="info")
+                return
+
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            applied = 0
+            errors = []
+            with hou.undos.group("Shading Toolkit: Set '{}'".format(parm_name)):
+                for target in targets:
+                    ok, err = set_parm_tuple_value(target, parm_name, values)
+                    if ok:
+                        applied += 1
+                    else:
+                        errors.append("{}: {}".format(target.path(), err))
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
         msg = "Set '{}' on {}/{} node(s).".format(parm_name, applied, len(targets))
         if errors:
             msg += " {} error(s), see Houdini console.".format(len(errors))
             for e in errors:
-                print("[Lookdev Toolkit] " + e)
-        self._set_status(msg, error=bool(errors) and applied == 0)
+                print("[Shading Toolkit] " + e)
+            self._set_status(msg, level="error" if applied == 0 else "warning")
+        else:
+            self._set_status(msg, level="success")
 
     # -- copy-from-reference tab -------------------------------------------
     def _apply_copy_from_reference(self):
         if not self._reference_path:
-            self._set_status("Right-click a node in the list and choose 'Set As Reference Node' first.", error=True)
+            self._set_status(
+                "Right-click a node in the list and choose 'Set As Reference Node' first.", level="warning"
+            )
             return
         src_node = hou.node(self._reference_path)
         if src_node is None:
-            self._set_status("Reference node no longer exists: {}".format(self._reference_path), error=True)
+            self._set_status("Reference node no longer exists: {}".format(self._reference_path), level="error")
             return
 
         targets = [n for n in self._checked_nodes() if n.path() != self._reference_path]
         if not targets:
-            self._set_status("No checked target nodes (other than the reference) to copy to.", error=True)
+            self._set_status("No checked target nodes (other than the reference) to copy to.", level="warning")
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Confirm Copy",
+            "Copy all parameters from '{}' onto {} checked node(s)?\n\nThis can be undone with Ctrl+Z.".format(
+                src_node.name(), len(targets)
+            ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            self._set_status("Copy cancelled.", level="info")
             return
 
         exclude_patterns = _split_patterns(self.exclude_edit.text())
         include_spare = self.include_spare_check.isChecked()
 
-        total_copied = total_skipped = 0
-        all_errors = []
-        with hou.undos.group("Lookdev Toolkit: Copy parms from {}".format(src_node.name())):
-            for dst in targets:
-                copied, skipped, errors = copy_all_parms(
-                    src_node, dst, exclude_patterns=exclude_patterns, include_spare=include_spare
-                )
-                total_copied += copied
-                total_skipped += skipped
-                all_errors.extend(errors)
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            total_copied = total_skipped = 0
+            all_errors = []
+            with hou.undos.group("Shading Toolkit: Copy parms from {}".format(src_node.name())):
+                for dst in targets:
+                    copied, skipped, errors = copy_all_parms(
+                        src_node, dst, exclude_patterns=exclude_patterns, include_spare=include_spare
+                    )
+                    total_copied += copied
+                    total_skipped += skipped
+                    all_errors.extend(errors)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
         msg = "Copied parameters to {} node(s): {} copied, {} skipped.".format(
             len(targets), total_copied, total_skipped
@@ -767,13 +1098,25 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
         if all_errors:
             msg += " {} error(s), see Houdini console.".format(len(all_errors))
             for e in all_errors:
-                print("[Lookdev Toolkit] " + e)
-        self._set_status(msg)
+                print("[Shading Toolkit] " + e)
+            self._set_status(msg, level="warning")
+        else:
+            self._set_status(msg, level="success")
 
     # -- misc -----------------------------------------------------------------
-    def _set_status(self, text, error=False):
-        self.status_label.setText(text)
-        self.status_label.setStyleSheet("color: {};".format("#d9534f" if error else "gray"))
+    def _set_status(self, text, level="info"):
+        icons = {"info": "\u2139", "success": "\u2713", "warning": "\u26A0", "error": "\u2715"}
+        colors = {
+            "info": "#9da7b3",
+            "success": "#6fcf73",
+            "warning": "#e0b94e",
+            "error": "#e0605a",
+        }
+        prefix = icons.get(level, "")
+        self.status_label.setText("{}  {}".format(prefix, text).strip())
+        self.status_label.setStyleSheet(
+            "color: {}; padding: 4px 6px;".format(colors.get(level, colors["info"]))
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -782,18 +1125,18 @@ class LookdevToolkitWidget(QtWidgets.QWidget):
 _toolkit_window = None
 
 
-def show_lookdev_toolkit():
-    """Open the Lookdev Toolkit in a standalone floating window, or close
+def show_Shading_toolkit():
+    """Open the Shading Toolkit in a standalone floating window, or close
     and reopen it if one is already open. This is the function to call
     from a shelf tool, the Python Source Editor, or the Python Shell::
 
-        import lookdev_toolkit
-        lookdev_toolkit.show_lookdev_toolkit()
+        import Shading_toolkit
+        Shading_toolkit.show_Shading_toolkit()
     """
     global _toolkit_window
     if hou is None:
         raise RuntimeError(
-            "Lookdev Toolkit must be run inside Houdini ('hou' module not found)."
+            "Shading Toolkit must be run inside Houdini ('hou' module not found)."
         )
 
     if _toolkit_window is not None:
@@ -803,7 +1146,7 @@ def show_lookdev_toolkit():
             pass  # underlying Qt widget was already destroyed
 
     parent = hou.qt.mainWindow()
-    _toolkit_window = LookdevToolkitWidget(parent)
+    _toolkit_window = ShadingToolkitWidget(parent)
     _toolkit_window.setWindowFlags(QtCore.Qt.Window)
     _toolkit_window.show()
     _toolkit_window.raise_()
@@ -813,7 +1156,7 @@ def show_lookdev_toolkit():
 
 def createInterface():
     """Entry point used by Houdini Python Panels."""
-    return LookdevToolkitWidget()
+    return ShadingToolkitWidget()
 
 
 # Houdini does not reliably set __name__ to "__main__" when a script is run
@@ -822,7 +1165,7 @@ def createInterface():
 # executes embedded scripts). Relying on that guard means the window would
 # silently never appear in those contexts, so instead we open the tool
 # unconditionally whenever this module is loaded inside Houdini. Re-running
-# `import lookdev_toolkit` after the first time is a no-op (Python caches
-# modules); call show_lookdev_toolkit() directly to reopen it afterwards.
+# `import Shading_toolkit` after the first time is a no-op (Python caches
+# modules); call show_Shading_toolkit() directly to reopen it afterwards.
 if hou is not None:
-    show_lookdev_toolkit()
+    show_Shading_toolkit()
