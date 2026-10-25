@@ -12,6 +12,8 @@ A small standalone tool that:
   6. Or copy the *entire* parameter interface from one "reference" node
      onto all the other checked nodes (optionally excluding some
      parameters, e.g. transforms).
+  7. Add utility shading nodes (Color Correct, Multiply, Range, Clamp)
+     after one or many selected nodes, with automatic output rewiring.
 
 Usage
 -----
@@ -391,6 +393,89 @@ def set_parm_tuple_value(node, parm_name, values, as_expression=False, expr_lang
         return False, str(exc)
 
 
+def _find_available_node_type(parent_node, candidates):
+    """Return the first matching node type name available under parent_node."""
+    category = parent_node.childTypeCategory()
+    if category is None:
+        return None
+    node_types = category.nodeTypes()
+    if not node_types:
+        return None
+
+    available = list(node_types.keys())
+    exact_map = {name.lower(): name for name in available}
+
+    for candidate in candidates:
+        found = exact_map.get(candidate.lower())
+        if found:
+            return found
+    return None
+
+
+def insert_utility_node_after(source_node, utility_type_name):
+    """Create utility node after source_node and wire it between outputs.
+
+    Returns (new_node_or_none, error_or_none).
+    """
+    if source_node is None:
+        return None, "source node is invalid"
+
+    parent = source_node.parent()
+    if parent is None:
+        return None, "source node has no parent network"
+
+    # NodeConnection semantics: inputNode() is the upstream node (the one
+    # feeding the wire), outputNode() is the downstream node receiving it.
+    # Snapshot (downstream node, downstream input index, source output index)
+    # before touching any wiring.
+    downstream = []
+    try:
+        for conn in source_node.outputConnections():
+            downstream.append((conn.outputNode(), conn.inputIndex(), conn.outputIndex()))
+    except Exception as exc:  # noqa: BLE001
+        print("[Shading Toolkit] Failed reading output connections: {}".format(exc))
+
+    # Route the first connected output through the utility node; if nothing
+    # is connected yet, just use output 0.
+    source_output_index = downstream[0][2] if downstream else 0
+
+    try:
+        new_node = parent.createNode(utility_type_name)
+    except Exception as exc:  # noqa: BLE001
+        return None, "failed to create '{}' after '{}': {}".format(
+            utility_type_name, source_node.path(), exc
+        )
+
+    try:
+        new_node.setInput(0, source_node, source_output_index)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            new_node.destroy()
+        except Exception:
+            pass
+        return None, "failed to connect '{}' -> '{}': {}".format(
+            source_node.path(), new_node.path(), exc
+        )
+
+    rewire_errors = []
+    for dest_node, dest_input_index, out_index in downstream:
+        if dest_node is None or dest_node == new_node or out_index != source_output_index:
+            continue
+        try:
+            dest_node.setInput(dest_input_index, new_node, 0)
+        except Exception as exc:  # noqa: BLE001
+            rewire_errors.append(str(exc))
+
+    try:
+        new_node.moveToGoodPosition()
+    except Exception:
+        pass
+
+    if rewire_errors:
+        return new_node, "created, but failed to rewire {} connection(s)".format(len(rewire_errors))
+    return new_node, None
+
+
 # ---------------------------------------------------------------------------
 # Dynamic value editor - builds the right Qt widgets for a given parmTemplate.
 # ---------------------------------------------------------------------------
@@ -570,6 +655,56 @@ class _FriendlySplitter(QtWidgets.QSplitter):
 # Main widget.
 # ---------------------------------------------------------------------------
 class ShadingToolkitWidget(QtWidgets.QWidget):
+    AUTO_ENGINE = "Auto (match selected node)"
+    # engine -> utility -> candidate node type names (first one that exists wins).
+    # Non-native engines (Arnold/Redshift/V-Ray) need their plugin installed,
+    # and the names below should be adjusted if your plugin version differs.
+    ENGINE_UTILITY_NODES = {
+        "MaterialX": {
+            "Color Correct": ["mtlxcolorcorrect"],
+            "Multiply": ["mtlxmultiply"],
+            "Range": ["mtlxrange"],
+            "Clamp": ["mtlxclamp"],
+            "Add": ["mtlxadd"],
+        },
+        "Arnold": {
+            "Color Correct": ["arnold::color_correct"],
+            "Multiply": ["arnold::multiply"],
+            "Range": ["arnold::range"],
+            "Clamp": ["arnold::clamp"],
+            "Add": ["arnold::add"],
+        },
+        "Redshift": {
+            "Color Correct": ["redshift::RSColorCorrection"],
+            "Multiply": ["redshift::RSMathMul"],
+            "Range": ["redshift::RSMathRange"],
+            "Clamp": ["redshift::RSMathClamp"],
+            "Add": ["redshift::RSMathAdd"],
+        },
+        "V-Ray": {
+            "Color Correct": ["vray::TexColorCorrection", "TexColorCorrection"],
+            "Multiply": ["vray::TexAColorOp", "TexAColorOp"],
+            "Range": ["vray::TexRemap", "TexRemap"],
+            "Clamp": ["vray::TexClamp", "TexClamp"],
+            "Add": ["vray::TexAdd", "TexAdd"],
+        },
+        "Houdini VOP": {
+            "Color Correct": ["colorcorrect"],
+            "Multiply": ["multiply"],
+            "Range": ["fit", "fitrange"],
+            "Clamp": ["clamp"],
+            "Add": ["add"],
+        },
+    }
+    UTILITY_NAMES = ["Color Correct", "Multiply", "Range", "Clamp", "Add"]
+    # Node-type name prefix -> engine, used by the Auto mode.
+    ENGINE_PREFIXES = (
+        ("mtlx", "MaterialX"),
+        ("arnold", "Arnold"),
+        ("redshift", "Redshift"),
+        ("vray", "V-Ray"),
+        ("v_ray", "V-Ray"),
+    )
 
     def __init__(self, parent=None):
         super(ShadingToolkitWidget, self).__init__(parent)
@@ -598,8 +733,9 @@ class ShadingToolkitWidget(QtWidgets.QWidget):
         splitter.setHandleWidth(14)
         splitter.addWidget(self._build_tree())
         splitter.addWidget(self._build_tabs())
-        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([500, 500])
         main_layout.addWidget(splitter, 1)
 
         self.status_label = QtWidgets.QLabel("")
@@ -655,7 +791,7 @@ class ShadingToolkitWidget(QtWidgets.QWidget):
         self.include_roots_check = QtWidgets.QCheckBox("Include selected nodes themselves")
         layout.addWidget(self.include_roots_check, 2, 2, 1, 2)
 
-        rescan_btn = QtWidgets.QPushButton("Rescan Selection")
+        rescan_btn = QtWidgets.QPushButton("Scan Selection")
         rescan_btn.setObjectName("PrimaryButton")
         rescan_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
         rescan_btn.clicked.connect(self.rescan)
@@ -687,14 +823,15 @@ class ShadingToolkitWidget(QtWidgets.QWidget):
         v.addLayout(quick_filter_row)
 
         self.tree = QtWidgets.QTreeWidget()
-        self.tree.setHeaderLabels(["Name", "Path", "Type", "Matched Parm"])
-        self.tree.setColumnWidth(0, 160)
-        self.tree.setColumnWidth(1, 260)
-        self.tree.setColumnWidth(2, 180)
+        self.tree.setHeaderLabels(["Name", "Path", "Type"])
+        self.tree.setColumnWidth(0, 140)
+        self.tree.setColumnWidth(1, 220)
+        self.tree.setColumnWidth(2, 100)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSortingEnabled(True)
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
+        self.tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self.tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
@@ -750,7 +887,12 @@ class ShadingToolkitWidget(QtWidgets.QWidget):
         tabs.addTab(
             self._build_copy_tab(),
             self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton),
-            "Copy All From Reference",
+            "Copy Reference",
+        )
+        tabs.addTab(
+            self._build_utility_nodes_tab(),
+            self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogNewFolder),
+            "Shading Nodes",
         )
         return tabs
 
@@ -828,6 +970,51 @@ class ShadingToolkitWidget(QtWidgets.QWidget):
         apply_btn.clicked.connect(self._apply_copy_from_reference)
         layout.addWidget(apply_btn)
 
+        return w
+
+    def _build_utility_nodes_tab(self):
+        w = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+
+        help_text = QtWidgets.QLabel(
+            "Create utility shading nodes after selected node(s) in the list.\n"
+            "If outputs are already connected, the utility node is inserted between them."
+        )
+        help_text.setWordWrap(True)
+        layout.addWidget(help_text)
+
+        self.utility_target_label = QtWidgets.QLabel("Targets: select one or more nodes in the list")
+        self.utility_target_label.setStyleSheet("font-weight: bold;")
+        self.utility_target_label.setWordWrap(True)
+        layout.addWidget(self.utility_target_label)
+
+        engine_row = QtWidgets.QHBoxLayout()
+        engine_row.addWidget(QtWidgets.QLabel("Render engine:"))
+        self.engine_combo = QtWidgets.QComboBox()
+        self.engine_combo.addItem(self.AUTO_ENGINE)
+        self.engine_combo.addItems(list(self.ENGINE_UTILITY_NODES.keys()))
+        engine_row.addWidget(self.engine_combo, 1)
+        layout.addLayout(engine_row)
+
+        grid = QtWidgets.QGridLayout()
+        for idx, utility_name in enumerate(self.UTILITY_NAMES):
+            btn = QtWidgets.QPushButton("{}".format(utility_name))
+            btn.setObjectName("PrimaryButton")
+            btn.clicked.connect(
+                lambda _checked=False, name=utility_name: self._create_utility_nodes_for_selection(name)
+            )
+            row = idx // 2
+            col = idx % 2
+            grid.addWidget(btn, row, col)
+        layout.addLayout(grid)
+
+        batch_tip = QtWidgets.QLabel(
+            "Batch mode: multi-select in the node list (Ctrl/Shift-click) to apply to multiple nodes."
+        )
+        batch_tip.setWordWrap(True)
+        batch_tip.setStyleSheet("color: #9da7b3;")
+        layout.addWidget(batch_tip)
+        layout.addStretch()
         return w
 
     # -- scanning ------------------------------------------------------------
@@ -917,10 +1104,16 @@ class ShadingToolkitWidget(QtWidgets.QWidget):
         return nodes
 
     def _on_tree_selection_changed(self):
-        item = self.tree.currentItem()
-        if item is None:
+        selected_items = self.tree.selectedItems()
+        if not selected_items:
+            if hasattr(self, "utility_target_label"):
+                self.utility_target_label.setText("Targets: select one or more nodes in the list")
             return
+
+        item = self.tree.currentItem() or selected_items[0]
         self._inspected_path = item.data(0, QtCore.Qt.UserRole)
+        if hasattr(self, "utility_target_label"):
+            self.utility_target_label.setText("Targets: {} selected node(s)".format(len(selected_items)))
         self._refresh_parameter_table()
 
     def _on_tree_context_menu(self, pos):
@@ -941,6 +1134,86 @@ class ShadingToolkitWidget(QtWidgets.QWidget):
         elif action == reference_action:
             self._reference_path = path
             self.reference_label.setText("Reference node: {}".format(path))
+
+    def _selected_nodes_from_tree(self):
+        nodes = []
+        for item in self.tree.selectedItems():
+            path = item.data(0, QtCore.Qt.UserRole)
+            node = hou.node(path)
+            if node is not None:
+                nodes.append(node)
+        return nodes
+
+    def _engine_for_node(self, node):
+        """Engine chosen in the combo; in Auto mode, inferred from the node type."""
+        choice = self.engine_combo.currentText()
+        if choice != self.AUTO_ENGINE:
+            return choice
+        type_name = node.type().name().lower()
+        for prefix, engine in self.ENGINE_PREFIXES:
+            if type_name.startswith(prefix):
+                return engine
+        return "Houdini VOP"
+
+    def _create_utility_nodes_for_selection(self, utility_label):
+        selected_nodes = self._selected_nodes_from_tree()
+        if not selected_nodes:
+            self._set_status("Select at least one node in the list first.", level="warning")
+            return
+
+        if len(selected_nodes) > 1:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Confirm Batch Utility Insert",
+                "Create '{}' after {} selected node(s)?\n\n"
+                "Existing output connections will be rewired through the new utility node."
+                .format(utility_label, len(selected_nodes)),
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes,
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                self._set_status("Utility node creation cancelled.", level="info")
+                return
+
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            created = 0
+            errors = []
+            with hou.undos.group("Shading Toolkit: Add {} utility node".format(utility_label)):
+                for source in selected_nodes:
+                    parent = source.parent()
+                    engine = self._engine_for_node(source)
+                    candidates = self.ENGINE_UTILITY_NODES[engine][utility_label]
+                    resolved_type = _find_available_node_type(parent, candidates) if parent else None
+                    if not resolved_type:
+                        errors.append("{}: no '{}' node available for {} (tried {})".format(
+                            source.path(), utility_label, engine, ", ".join(candidates)))
+                        continue
+                    new_node, err = insert_utility_node_after(source, resolved_type)
+                    if new_node is None:
+                        errors.append("{}: {}".format(source.path(), err))
+                        continue
+                    created += 1
+                    if err:
+                        errors.append("{}: {}".format(source.path(), err))
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+        if errors:
+            for err in errors:
+                print("[Shading Toolkit] " + err)
+            self._set_status(
+                "Created '{}' for {}/{} node(s). {} issue(s), see Houdini console.".format(
+                    utility_label, created, len(selected_nodes), len(errors)
+                ),
+                level="warning" if created else "error",
+            )
+            return
+
+        self._set_status(
+            "Created '{}' node(s) after {} selected node(s).".format(utility_label, created),
+            level="success",
+        )
 
     # -- node parameters tab ---------------------------------------------------
     def _refresh_parameter_table(self):
