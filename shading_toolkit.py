@@ -127,13 +127,13 @@ QPushButton:pressed {
     background-color: #3a3a3a;
 }
 QPushButton#PrimaryButton {
-    background-color: #3d7ab5;
-    border: 1px solid #5296d5;
+    background-color: #222222;
+    border: 1px solid #333333;
     color: #ffffff;
     font-weight: bold;
 }
 QPushButton#PrimaryButton:hover {
-    background-color: #4a8cc9;
+    background-color: #2a8cc9;
 }
 QCheckBox {
     spacing: 6px;
